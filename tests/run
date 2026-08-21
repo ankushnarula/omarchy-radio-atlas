@@ -87,6 +87,10 @@ rg -q 'pendingVolume' "$project_dir/BarWidget.qml"
 rg -q 'playingStationUuid === stationRow.modelData.uuid' "$project_dir/RadioAtlas.qml"
 rg -q 'readonly property string playingStationName' "$project_dir/RadioAtlas.qml"
 rg -q 'readonly property string playingTrackTitle' "$project_dir/RadioAtlas.qml"
+sed -n '/function openTrackUrl/,/^  }/p' "$project_dir/RadioAtlas.qml" \
+  | rg -Fq 'if (url && Qt.openUrlExternally(url)) dismiss()'
+sed -n '/id: trackLookupButton/,/^            }/p' "$project_dir/RadioAtlas.qml" \
+  | rg -Fq 'root.searchPlayingTrack()'
 sed -n '/id: playerPanel/,/^          }/p' "$project_dir/RadioAtlas.qml" \
   | rg -Fq 'root.playingStationName || root.playerTitle || "Unknown station"'
 sed -n '/id: playingFavoriteButton/,/^            }/p' "$project_dir/RadioAtlas.qml" \

@@ -18,6 +18,7 @@ usual play, pause, previous, and next controls.
 - Automatic country focus for the station that is actually playing
 - Current station identity, track metadata, and one-click favoriting in the player
 - Detection of `Artist - Track` metadata using hyphen, en dash, or em dash separators
+- One-click YouTube search for the detected playing track
 - Instant cached results while full-directory search and country browsing refresh from Radio Browser
 - Random tuning that avoids recent stations, plus favorites and listening history
 - Independent volume slider, mute, and bar-wheel volume control
