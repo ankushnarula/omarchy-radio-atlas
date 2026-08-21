@@ -7,6 +7,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "RadioModel.js" as RadioModel
+import "TrackMetadata.js" as TrackMetadata
 
 Item {
   id: root
@@ -87,6 +88,7 @@ Item {
     var station = playingStationName.toLowerCase()
     return title && station && title.toLowerCase() !== station ? title : ""
   }
+  readonly property var playingTrack: TrackMetadata.parse(playingTrackTitle)
   readonly property bool remoteMode: mode !== "favorites" && mode !== "recent"
   readonly property bool lightTheme:
     0.2126 * background.r + 0.7152 * background.g + 0.0722 * background.b > 0.5
