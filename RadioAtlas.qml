@@ -479,6 +479,17 @@ Item {
     stopProcess.running = true
   }
 
+  function searchPlayingTrack() {
+    if (!playingTrack) return
+    var query = playingTrack.artist + " " + playingTrack.track
+    openTrackUrl("https://www.youtube.com/results?search_query="
+      + encodeURIComponent(query))
+  }
+
+  function openTrackUrl(url) {
+    if (url && Qt.openUrlExternally(url)) dismiss()
+  }
+
   function applyPlayerState(raw) {
     try {
       if (typeof raw !== "string" || raw.length > 65536)
@@ -1511,7 +1522,7 @@ Item {
               id: nowPlaying
               anchors.left: parent.left
               anchors.leftMargin: Style.spacing.md
-              anchors.right: playingFavoriteButton.left
+              anchors.right: trackLookupButton.left
               anchors.rightMargin: Style.spacing.xs
               anchors.top: parent.top
               anchors.topMargin: Style.spacing.md
@@ -1542,6 +1553,23 @@ Item {
               font.family: Style.font.menuFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
+            }
+
+            Button {
+              id: trackLookupButton
+              anchors.right: playingFavoriteButton.left
+              anchors.rightMargin: Style.spacing.xs
+              anchors.top: parent.top
+              anchors.topMargin: Style.spacing.sm
+              visible: root.playerRunning && root.playingTrack !== null
+              iconText: "\uf16a"
+              tooltipText: "Search this track on YouTube"
+              focusable: true
+              foreground: root.foreground
+              accent: root.accent
+              Accessible.role: Accessible.Button
+              Accessible.name: tooltipText
+              onClicked: root.searchPlayingTrack()
             }
 
             Button {
