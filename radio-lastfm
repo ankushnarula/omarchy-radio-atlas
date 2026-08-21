@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+config_root=${XDG_CONFIG_HOME:-$HOME/.config}
+config_file="$config_root/radio-atlas/lastfm.conf"
+api_root="https://ws.audioscrobbler.com/2.0/"
+
+usage() {
+  echo "Usage: radio-lastfm resolve ARTIST TRACK" >&2
+  echo "       radio-lastfm now-playing ARTIST TRACK MBID DURATION" >&2
+  echo "       radio-lastfm scrobble ARTIST TRACK MBID DURATION TIMESTAMP" >&2
+  exit 2
+}
+
+[[ $# -ge 3 ]] || usage
+action=$1
+artist=$2
+track=$3
+[[ $action == resolve || $action == now-playing || $action == scrobble ]] || usage
+case $action in
+  resolve) [[ $# == 3 ]] || usage ;;
+  now-playing) [[ $# == 5 ]] || usage ;;
+  scrobble) [[ $# == 6 ]] || usage ;;
+esac
+
+[[ -s $config_file ]] || exit 0
+[[ $(stat -c '%a' -- "$config_file") == 600 ]] || {
+  echo "Last.fm config must be readable only by its owner: $config_file" >&2
+  exit 3
+}
+
+read_setting() {
+  local name=$1 value
+  value=$(sed -n "s/^${name}=//p" "$config_file" | tail -n 1)
+  [[ $value != *$'\n'* && $value != *$'\r'* ]] || return 1
+  printf '%s' "$value"
+}
+
+api_key=$(read_setting LASTFM_API_KEY) || exit 0
+[[ $api_key =~ ^[A-Za-z0-9]{16,64}$ ]] || exit 3
+[[ -n $artist && -n $track && ${#artist} -le 160 && ${#track} -le 160 ]] || exit 2
+
+api_secret=$(read_setting LASTFM_API_SECRET) || exit 3
+session_key=$(read_setting LASTFM_SESSION_KEY) || exit 3
+[[ $api_secret =~ ^[A-Za-z0-9]{16,128}$ ]] || exit 3
+[[ $session_key =~ ^[A-Za-z0-9_-]{16,128}$ ]] || exit 3
+
+log_result() {
+  logger --tag radio-atlas-lastfm -- "$*" 2>/dev/null || true
+}
+
+if [[ $action == resolve ]]; then
+  response=$(curl --fail --silent --show-error --max-time 12 --proto '=https' --tlsv1.2 \
+    --get --user-agent "Radio Atlas Last.fm scrobbler" \
+    --data-urlencode 'method=track.getInfo' \
+    --data-urlencode "api_key=$api_key" \
+    --data-urlencode "artist=$artist" \
+    --data-urlencode "track=$track" \
+    --data-urlencode 'autocorrect=1' \
+    --data-urlencode 'format=json' "$api_root") || {
+      log_result "resolve failed: $artist — $track"
+      exit 4
+    }
+
+  resolved=$(jq -ce '
+    .track as $track
+    | ($track.artist.name // "") as $artist
+    | ($track.name // "") as $name
+    | ($track.mbid // "") as $mbid
+    | (($track.duration // 0) | tonumber? // 0) as $duration
+    | select($artist | type == "string" and length > 0 and length <= 160)
+    | select($name | type == "string" and length > 0 and length <= 160)
+    | {
+        artist: $artist,
+        track: $name,
+        mbid: (if ($mbid | type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) then $mbid else "" end),
+        durationMs: (if $duration > 0 and $duration <= 86400000 then $duration else 0 end)
+      }
+  ' <<< "$response") || {
+    log_result "resolve returned no catalogue track: $artist — $track"
+    exit 4
+  }
+  printf '%s\n' "$resolved"
+  exit 0
+fi
+
+mbid=$4
+duration=$5
+timestamp=${6:-}
+[[ -z $mbid || $mbid =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || exit 2
+[[ $duration =~ ^[0-9]{1,5}$ && $duration -le 86400 ]] || exit 2
+
+method=track.updateNowPlaying
+signature="api_key${api_key}artist${artist}"
+[[ $duration == 0 ]] || signature+="duration${duration}"
+[[ -z $mbid ]] || signature+="mbid${mbid}"
+signature+="method${method}sk${session_key}track${track}${api_secret}"
+arguments=(
+  --data-urlencode "method=$method"
+  --data-urlencode "api_key=$api_key"
+  --data-urlencode "sk=$session_key"
+  --data-urlencode "artist=$artist"
+  --data-urlencode "track=$track"
+)
+[[ $duration == 0 ]] || arguments+=(--data-urlencode "duration=$duration")
+[[ -z $mbid ]] || arguments+=(--data-urlencode "mbid=$mbid")
+
+if [[ $action == scrobble ]]; then
+  [[ $timestamp =~ ^[0-9]{10}$ ]] || usage
+  method=track.scrobble
+  signature="api_key${api_key}artist${artist}chosenByUser0"
+  [[ $duration == 0 ]] || signature+="duration${duration}"
+  [[ -z $mbid ]] || signature+="mbid${mbid}"
+  signature+="method${method}sk${session_key}timestamp${timestamp}track${track}${api_secret}"
+  arguments=(
+    --data-urlencode "method=$method"
+    --data-urlencode "api_key=$api_key"
+    --data-urlencode "sk=$session_key"
+    --data-urlencode "artist=$artist"
+    --data-urlencode "track=$track"
+    --data-urlencode "timestamp=$timestamp"
+    --data-urlencode "chosenByUser=0"
+  )
+  [[ $duration == 0 ]] || arguments+=(--data-urlencode "duration=$duration")
+  [[ -z $mbid ]] || arguments+=(--data-urlencode "mbid=$mbid")
+fi
+
+api_sig=$(printf '%s' "$signature" | md5sum | awk '{print $1}')
+response=$(curl --fail --silent --show-error --max-time 12 --proto '=https' --tlsv1.2 \
+  --user-agent "Radio Atlas Last.fm scrobbler" \
+  "${arguments[@]}" --data-urlencode "api_sig=$api_sig" \
+  --data-urlencode 'format=json' "$api_root") || {
+    log_result "$action request failed: $artist — $track"
+    exit 4
+  }
+
+if [[ $action == now-playing ]]; then
+  ignored_code=$(jq -er '.nowplaying.ignoredMessage.code | tonumber' <<< "$response") || {
+    log_result "now-playing returned an invalid response: $artist — $track"
+    exit 4
+  }
+  if (( ignored_code != 0 )); then
+    ignored_message=$(jq -r '.nowplaying.ignoredMessage["#text"] // "ignored"' <<< "$response")
+    log_result "now-playing ignored ($ignored_code): $artist — $track — $ignored_message"
+    exit 5
+  fi
+  log_result "now-playing accepted: $artist — $track"
+  printf '%s\n' '{"accepted":true,"ignored":false}'
+  exit 0
+fi
+
+accepted=$(jq -er '.scrobbles["@attr"].accepted | tonumber' <<< "$response") || {
+  log_result "scrobble returned an invalid response: $artist — $track"
+  exit 4
+}
+ignored=$(jq -er '.scrobbles["@attr"].ignored | tonumber' <<< "$response") || exit 4
+ignored_code=$(jq -er '.scrobbles.scrobble.ignoredMessage.code | tonumber' <<< "$response") || exit 4
+if (( accepted != 1 || ignored != 0 || ignored_code != 0 )); then
+  ignored_message=$(jq -r '.scrobbles.scrobble.ignoredMessage["#text"] // "ignored"' <<< "$response")
+  log_result "scrobble ignored ($ignored_code): $artist — $track — $ignored_message"
+  exit 5
+fi
+
+log_result "scrobble accepted: $artist — $track"
+printf '%s\n' '{"accepted":true,"ignored":false}'

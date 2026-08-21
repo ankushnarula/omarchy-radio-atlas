@@ -20,6 +20,7 @@ usual play, pause, previous, and next controls.
 - Detection of `Artist - Track` metadata using hyphen, en dash, or em dash separators
 - One-click YouTube search for the detected playing track
 - Direct Spotify and Apple Music links for the detected playing track
+- Optional Last.fm Now Playing updates and scrobbling for detected tracks
 - Instant cached results while full-directory search and country browsing refresh from Radio Browser
 - Random tuning that avoids recent stations, plus favorites and listening history
 - Independent volume slider, mute, and bar-wheel volume control
@@ -52,6 +53,34 @@ omarchy plugin remove akshar.radio-atlas
 Favorites, listening history, and the saved volume remain in
 `~/.local/share/radio-atlas/state.json` so reinstalling restores them. Remove
 `~/.local/share/radio-atlas/` manually if you also want to delete that data.
+
+## Last.fm
+
+Last.fm scrobbling is opt-in. Create a Last.fm API application, then save its
+API key and shared secret at `~/.config/radio-atlas/lastfm.conf` with
+permissions `600`:
+
+```ini
+LASTFM_API_KEY=your_api_key
+LASTFM_API_SECRET=your_shared_secret
+```
+
+Authorize the application once with:
+
+```bash
+~/.config/omarchy/plugins/akshar.radio-atlas/radio-lastfm-auth begin
+# approve Radio Atlas in the browser
+~/.config/omarchy/plugins/akshar.radio-atlas/radio-lastfm-auth complete
+```
+
+The helper stores the resulting long-lived session key in the same credentials
+file. Radio Atlas sends Now Playing when track metadata appears, then scrobbles
+after half the resolved track duration or four uninterrupted minutes, whichever
+comes first. Unknown-duration tracks are finalized when the station naturally
+changes its track metadata. Before either submission it asks Last.fm to resolve
+the artist and track, and includes a MusicBrainz track ID when Last.fm has one.
+The radio station is not sent as album metadata. No Last.fm request is made
+without a complete credentials file.
 
 ## Controls
 

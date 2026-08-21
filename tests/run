@@ -12,14 +12,17 @@ jq -e '
   and .keepLoaded == true
 ' "$project_dir/manifest.json" >/dev/null
 
-bash -n "$project_dir/radio-fetch" "$project_dir/radio-player" "$project_dir/radio-track-links" \
+bash -n "$project_dir/radio-fetch" "$project_dir/radio-player" "$project_dir/radio-lastfm" \
+  "$project_dir/radio-lastfm-auth" "$project_dir/radio-track-links" \
   "$project_dir/radio-sandbox" "$project_dir/radio-session" "$project_dir/radio-state" \
-  "$project_dir/tests/fixtures/"* "$project_dir/tests/track-links.test.sh"
+  "$project_dir/tests/fixtures/"* "$project_dir/tests/lastfm.test.sh" \
+  "$project_dir/tests/track-links.test.sh"
 luac -p "$project_dir/radio-status.lua"
 node "$project_dir/tests/model.test.mjs"
 node "$project_dir/tests/track-metadata.test.mjs"
 python3 "$project_dir/tests/proxy.test.py"
 "$project_dir/tests/track-links.test.sh"
+"$project_dir/tests/lastfm.test.sh"
 ! rg -q 'playerStatusProcess|refreshPlayerStatus' \
   "$project_dir/BarWidget.qml" "$project_dir/RadioAtlas.qml"
 ! rg -q 'inertia' "$project_dir/Globe.qml"
@@ -92,6 +95,16 @@ sed -n '/function openTrackUrl/,/^  }/p' "$project_dir/RadioAtlas.qml" \
   | rg -Fq 'if (url && Qt.openUrlExternally(url)) dismiss()'
 sed -n '/id: trackLookupButton/,/^            }/p' "$project_dir/RadioAtlas.qml" \
   | rg -Fq 'root.searchPlayingTrack()'
+rg -q 'id: lastfmScrobbleTimer' "$project_dir/RadioAtlas.qml"
+rg -q 'id: lastfmResolveProcess' "$project_dir/RadioAtlas.qml"
+sed -n '/function lastfmThresholdSeconds/,/^  }/p' "$project_dir/RadioAtlas.qml" \
+  | rg -Fq 'Math.min(240, Math.ceil(lastfmTrackDurationMs / 2000))'
+sed -n '/function finalizeLastfmTrack/,/^  }/p' "$project_dir/RadioAtlas.qml" \
+  | rg -Fq 'submitLastfmScrobble(true)'
+sed -n '/id: lastfmScrobbleTimer/,/^  }/p' "$project_dir/RadioAtlas.qml" \
+  | rg -Fq 'root.submitLastfmScrobble(false)'
+sed -n '/id: lastfmScrobbleProcess/,/^  }/p' "$project_dir/RadioAtlas.qml" \
+  | rg -Fq 'exitCode === 5'
 sed -n '/id: playerPanel/,/^          }/p' "$project_dir/RadioAtlas.qml" \
   | rg -Fq 'root.playingStationName || root.playerTitle || "Unknown station"'
 sed -n '/id: playingFavoriteButton/,/^            }/p' "$project_dir/RadioAtlas.qml" \
