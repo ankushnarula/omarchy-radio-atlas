@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# == 2 ]] || exit 2
+artist=$1
+track=$2
+[[ -n $artist && -n $track && ${#artist} -le 160 && ${#track} -le 160 ]] || exit 2
+
+curl --fail --silent --show-error --max-time 10 --proto '=https' --tlsv1.2 \
+  --get -H 'x-lt-caller: song.link/web-client' \
+  --data-urlencode 'providers=itunes,spotify' \
+  --data-urlencode "query=$artist $track" \
+  --data-urlencode 'type=song' \
+  --data-urlencode 'userCountry=US' \
+  'https://api.odesli.co/search-results' \
+  | jq -ce '
+      def spotify:
+        ([.spotify[]? | .id | select(type == "string" and test("^[A-Za-z0-9]{8,64}$"))]
+          | first // "") as $id
+        | if $id == "" then "" else "https://open.spotify.com/track/" + $id + "?autoplay_ok=0" end;
+      def appleMusic:
+        ([.itunes[]? | .id | select(type == "string" and test("^[0-9]{6,20}$"))]
+          | first // "") as $id
+        | if $id == "" then "" else "https://music.apple.com/us/song/" + $id end;
+      {spotify: spotify, appleMusic: appleMusic}'

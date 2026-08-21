@@ -48,6 +48,10 @@ Item {
   property int reportedVolume: 70
   property int pendingVolume: -1
   property string playerTitle: ""
+  property string spotifyTrackUrl: ""
+  property string appleMusicTrackUrl: ""
+  property string pendingTrackLinksArtist: ""
+  property string pendingTrackLinksTrack: ""
   property var playingStation: null
   property string playingStationUuid: ""
   property string recordedStationUuid: ""
@@ -70,6 +74,7 @@ Item {
 
   readonly property string fetchPath: Qt.resolvedUrl("radio-fetch").toString().replace(/^file:\/\//, "")
   readonly property string playerPath: Qt.resolvedUrl("radio-player").toString().replace(/^file:\/\//, "")
+  readonly property string trackLinksPath: Qt.resolvedUrl("radio-track-links").toString().replace(/^file:\/\//, "")
   readonly property string statePath: Qt.resolvedUrl("radio-state").toString().replace(/^file:\/\//, "")
   readonly property string runtimePath: Quickshell.env("XDG_RUNTIME_DIR") + "/omarchy-radio-atlas"
   readonly property string statusPath: runtimePath + "/status.json"
@@ -490,12 +495,32 @@ Item {
     if (url && Qt.openUrlExternally(url)) dismiss()
   }
 
+  function loadTrackLinks(track) {
+    spotifyTrackUrl = ""
+    appleMusicTrackUrl = ""
+    pendingTrackLinksArtist = track ? track.artist : ""
+    pendingTrackLinksTrack = track ? track.track : ""
+    startTrackLinksRequest()
+  }
+
+  function startTrackLinksRequest() {
+    if (trackLinksProcess.running || !pendingTrackLinksArtist || !pendingTrackLinksTrack) return
+    trackLinksProcess.artist = pendingTrackLinksArtist
+    trackLinksProcess.track = pendingTrackLinksTrack
+    pendingTrackLinksArtist = ""
+    pendingTrackLinksTrack = ""
+    trackLinksProcess.output = ""
+    trackLinksProcess.command = [trackLinksPath, trackLinksProcess.artist, trackLinksProcess.track]
+    trackLinksProcess.running = true
+  }
+
   function applyPlayerState(raw) {
     try {
       if (typeof raw !== "string" || raw.length > 65536)
         throw new Error("Player status is too large")
       var state = JSON.parse(raw || "{}")
       var previousUuid = playingStationUuid
+      var previousTitle = playerTitle
       var nextPlayingStation = state.station && typeof state.station === "object"
         && String(state.station.uuid || "") ? state.station : null
       var nextPlayingUuid = nextPlayingStation ? String(nextPlayingStation.uuid) : ""
@@ -535,6 +560,8 @@ Item {
         recordedStationUuid = nextPlayingUuid
         recordPlayed(nextPlayingUuid)
       }
+      if (playerTitle !== previousTitle || playingChanged)
+        loadTrackLinks(playingTrack)
     } catch (error) {
       playerError = "Player status is unavailable"
     }
@@ -910,6 +937,31 @@ Item {
       if (exitCode !== 0) root.playerError = "Could not stop the player"
       else root.statusReady = true
       Qt.callLater(root.playPendingStation)
+    }
+  }
+
+  Process {
+    id: trackLinksProcess
+    property string artist: ""
+    property string track: ""
+    property string output: ""
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: trackLinksProcess.output = text
+    }
+    onExited: function(exitCode) {
+      var current = root.playingTrack
+      if (exitCode === 0 && current && current.artist === artist && current.track === track) {
+        try {
+          var links = JSON.parse(trackLinksProcess.output || "{}")
+          root.spotifyTrackUrl = /^https:\/\/open\.spotify\.com\/track\//.test(links.spotify || "")
+            ? links.spotify : ""
+          root.appleMusicTrackUrl = /^https:\/\/music\.apple\.com\//.test(links.appleMusic || "")
+            ? links.appleMusic : ""
+        } catch (error) {}
+      }
+      Qt.callLater(root.startTrackLinksRequest)
     }
   }
 
@@ -1522,7 +1574,7 @@ Item {
               id: nowPlaying
               anchors.left: parent.left
               anchors.leftMargin: Style.spacing.md
-              anchors.right: trackLookupButton.left
+              anchors.right: appleMusicButton.left
               anchors.rightMargin: Style.spacing.xs
               anchors.top: parent.top
               anchors.topMargin: Style.spacing.md
@@ -1553,6 +1605,40 @@ Item {
               font.family: Style.font.menuFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
+            }
+
+            Button {
+              id: appleMusicButton
+              anchors.right: spotifyButton.left
+              anchors.rightMargin: Style.spacing.xs
+              anchors.top: parent.top
+              anchors.topMargin: Style.spacing.sm
+              visible: root.appleMusicTrackUrl !== ""
+              iconText: "\uf179"
+              tooltipText: "Open this track in Apple Music"
+              focusable: true
+              foreground: root.foreground
+              accent: root.accent
+              Accessible.role: Accessible.Button
+              Accessible.name: tooltipText
+              onClicked: root.openTrackUrl(root.appleMusicTrackUrl)
+            }
+
+            Button {
+              id: spotifyButton
+              anchors.right: trackLookupButton.left
+              anchors.rightMargin: Style.spacing.xs
+              anchors.top: parent.top
+              anchors.topMargin: Style.spacing.sm
+              visible: root.spotifyTrackUrl !== ""
+              iconText: "\uf1bc"
+              tooltipText: "Open this track in Spotify"
+              focusable: true
+              foreground: root.foreground
+              accent: root.accent
+              Accessible.role: Accessible.Button
+              Accessible.name: tooltipText
+              onClicked: root.openTrackUrl(root.spotifyTrackUrl)
             }
 
             Button {

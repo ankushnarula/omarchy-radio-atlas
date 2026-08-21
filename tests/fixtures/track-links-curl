@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' '{"spotify":[{"id":"0ZkWMpB7PsswU8cAnkETRL"}],"itunes":[{"id":"724303415"}]}'
