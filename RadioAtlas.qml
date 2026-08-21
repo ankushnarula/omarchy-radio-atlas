@@ -48,6 +48,17 @@ Item {
   property int reportedVolume: 70
   property int pendingVolume: -1
   property string playerTitle: ""
+  property string lastfmTrackKey: ""
+  property string lastfmTrackArtist: ""
+  property string lastfmTrackName: ""
+  property string lastfmTrackMbid: ""
+  property int lastfmTrackDurationMs: 0
+  property double lastfmTrackStartedAt: 0
+  property bool lastfmTrackResolved: false
+  property bool lastfmTrackScrobbled: false
+  property string pendingLastfmArtist: ""
+  property string pendingLastfmTrack: ""
+  property var pendingLastfmNowPlayingCommand: []
   property var playingStation: null
   property string playingStationUuid: ""
   property string recordedStationUuid: ""
@@ -70,6 +81,7 @@ Item {
 
   readonly property string fetchPath: Qt.resolvedUrl("radio-fetch").toString().replace(/^file:\/\//, "")
   readonly property string playerPath: Qt.resolvedUrl("radio-player").toString().replace(/^file:\/\//, "")
+  readonly property string lastfmPath: Qt.resolvedUrl("radio-lastfm").toString().replace(/^file:\/\//, "")
   readonly property string statePath: Qt.resolvedUrl("radio-state").toString().replace(/^file:\/\//, "")
   readonly property string runtimePath: Quickshell.env("XDG_RUNTIME_DIR") + "/omarchy-radio-atlas"
   readonly property string statusPath: runtimePath + "/status.json"
@@ -479,12 +491,102 @@ Item {
     stopProcess.running = true
   }
 
+  function clearLastfmTrack() {
+    lastfmScrobbleTimer.stop()
+    pendingLastfmArtist = ""
+    pendingLastfmTrack = ""
+    pendingLastfmNowPlayingCommand = []
+    lastfmTrackKey = ""
+    lastfmTrackArtist = ""
+    lastfmTrackName = ""
+    lastfmTrackMbid = ""
+    lastfmTrackDurationMs = 0
+    lastfmTrackStartedAt = 0
+    lastfmTrackResolved = false
+    lastfmTrackScrobbled = false
+  }
+
+  function lastfmThresholdSeconds() {
+    if (lastfmTrackDurationMs > 0 && lastfmTrackDurationMs <= 30000) return 0
+    return lastfmTrackDurationMs > 0
+      ? Math.min(240, Math.ceil(lastfmTrackDurationMs / 2000)) : 240
+  }
+
+  function submitLastfmScrobble(forceEligible) {
+    if (!lastfmTrackResolved || lastfmTrackScrobbled || lastfmScrobbleProcess.running) return
+    var threshold = lastfmThresholdSeconds()
+    if (threshold <= 0) return
+    var elapsed = Math.floor(Date.now() / 1000) - lastfmTrackStartedAt
+    if (!forceEligible && elapsed < threshold) return
+    lastfmTrackScrobbled = true
+    lastfmScrobbleProcess.trackKey = lastfmTrackKey
+    lastfmScrobbleProcess.command = [lastfmPath, "scrobble", lastfmTrackArtist,
+      lastfmTrackName, lastfmTrackMbid, String(Math.ceil(lastfmTrackDurationMs / 1000)),
+      String(lastfmTrackStartedAt)]
+    lastfmScrobbleProcess.running = true
+  }
+
+  function finalizeLastfmTrack(naturalTransition) {
+    if (!naturalTransition || !lastfmTrackResolved || lastfmTrackScrobbled) return
+    var elapsed = Math.floor(Date.now() / 1000) - lastfmTrackStartedAt
+    var threshold = lastfmTrackDurationMs > 0 ? lastfmThresholdSeconds() : 30
+    if (threshold > 0 && elapsed >= threshold) submitLastfmScrobble(true)
+  }
+
+  function startTrackScrobbling(track, naturalTransition) {
+    finalizeLastfmTrack(naturalTransition)
+    clearLastfmTrack()
+    if (!track || !playerRunning || playerPaused) return
+    lastfmTrackKey = track.artist + "\u0000" + track.track
+    lastfmTrackStartedAt = Math.floor(Date.now() / 1000)
+    pendingLastfmArtist = track.artist
+    pendingLastfmTrack = track.track
+    startLastfmResolveRequest()
+  }
+
+  function startLastfmResolveRequest() {
+    if (lastfmResolveProcess.running || !pendingLastfmArtist || !pendingLastfmTrack) return
+    lastfmResolveProcess.rawArtist = pendingLastfmArtist
+    lastfmResolveProcess.rawTrack = pendingLastfmTrack
+    pendingLastfmArtist = ""
+    pendingLastfmTrack = ""
+    lastfmResolveProcess.output = ""
+    lastfmResolveProcess.command = [lastfmPath, "resolve", lastfmResolveProcess.rawArtist,
+      lastfmResolveProcess.rawTrack]
+    lastfmResolveProcess.running = true
+  }
+
+  function queueLastfmNowPlaying() {
+    pendingLastfmNowPlayingCommand = [lastfmPath, "now-playing", lastfmTrackArtist,
+      lastfmTrackName, lastfmTrackMbid, String(Math.ceil(lastfmTrackDurationMs / 1000))]
+    startLastfmNowPlayingRequest()
+  }
+
+  function startLastfmNowPlayingRequest() {
+    if (lastfmNowPlayingProcess.running || pendingLastfmNowPlayingCommand.length === 0) return
+    lastfmNowPlayingProcess.command = pendingLastfmNowPlayingCommand
+    pendingLastfmNowPlayingCommand = []
+    lastfmNowPlayingProcess.running = true
+  }
+
+  function scheduleLastfmScrobble() {
+    if (!playerRunning || playerPaused || !lastfmTrackResolved) return
+    var threshold = lastfmThresholdSeconds()
+    if (threshold <= 0) return
+    var elapsedMs = (Math.floor(Date.now() / 1000) - lastfmTrackStartedAt) * 1000
+    var remainingMs = Math.max(1, threshold * 1000 - elapsedMs)
+    lastfmScrobbleTimer.interval = remainingMs
+    lastfmScrobbleTimer.restart()
+  }
+
   function applyPlayerState(raw) {
     try {
       if (typeof raw !== "string" || raw.length > 65536)
         throw new Error("Player status is too large")
       var state = JSON.parse(raw || "{}")
       var previousUuid = playingStationUuid
+      var wasPaused = playerPaused
+      var previousTitle = playerTitle
       var nextPlayingStation = state.station && typeof state.station === "object"
         && String(state.station.uuid || "") ? state.station : null
       var nextPlayingUuid = nextPlayingStation ? String(nextPlayingStation.uuid) : ""
@@ -503,7 +605,12 @@ Item {
       playingStation = nextPlayingStation
       playingStationUuid = playerRunning ? nextPlayingUuid : ""
       if (playerError === "Player status is unavailable") playerError = ""
-      if (!playerRunning) recordedStationUuid = ""
+      if (!playerRunning) {
+        recordedStationUuid = ""
+        clearLastfmTrack()
+      } else if (playerPaused) {
+        lastfmScrobbleTimer.stop()
+      }
 
       var matchingIndex = nextPlayingUuid
         ? RadioModel.indexByUuid(displayStations, nextPlayingUuid) : -1
@@ -523,6 +630,11 @@ Item {
       if (state.loaded === true && nextPlayingUuid && nextPlayingUuid !== recordedStationUuid) {
         recordedStationUuid = nextPlayingUuid
         recordPlayed(nextPlayingUuid)
+      }
+      var titleChanged = playerTitle !== previousTitle
+      if (titleChanged || playingChanged || (wasPaused && !playerPaused)) {
+        var naturalTransition = titleChanged && !playingChanged && !wasPaused && !playerPaused
+        startTrackScrobbling(playingTrack, naturalTransition)
       }
     } catch (error) {
       playerError = "Player status is unavailable"
@@ -903,6 +1015,57 @@ Item {
   }
 
   Process {
+    id: lastfmResolveProcess
+    property string rawArtist: ""
+    property string rawTrack: ""
+    property string output: ""
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: lastfmResolveProcess.output = text
+    }
+    onExited: function(exitCode) {
+      var key = rawArtist + "\u0000" + rawTrack
+      if (exitCode === 0 && root.lastfmTrackKey === key) {
+        try {
+          var resolved = JSON.parse(lastfmResolveProcess.output || "{}")
+          var duration = Math.round(Number(resolved.durationMs || 0))
+          if (!resolved.artist || !resolved.track || !isFinite(duration) || duration < 0)
+            throw new Error("Invalid Last.fm track metadata")
+          root.lastfmTrackArtist = String(resolved.artist)
+          root.lastfmTrackName = String(resolved.track)
+          root.lastfmTrackMbid = String(resolved.mbid || "")
+          root.lastfmTrackDurationMs = duration
+          root.lastfmTrackResolved = true
+          root.queueLastfmNowPlaying()
+          root.scheduleLastfmScrobble()
+        } catch (error) {}
+      }
+      Qt.callLater(root.startLastfmResolveRequest)
+    }
+  }
+
+  Process {
+    id: lastfmNowPlayingProcess
+    command: []
+    onExited: Qt.callLater(root.startLastfmNowPlayingRequest)
+  }
+
+  Process {
+    id: lastfmScrobbleProcess
+    property string trackKey: ""
+    command: []
+    onExited: function(exitCode) {
+      if (exitCode === 0 || exitCode === 5 || trackKey !== root.lastfmTrackKey) return
+      root.lastfmTrackScrobbled = false
+      if (root.playerRunning && !root.playerPaused) {
+        lastfmScrobbleTimer.interval = 30000
+        lastfmScrobbleTimer.restart()
+      }
+    }
+  }
+
+  Process {
     id: stateProcess
     property string action: ""
     property string output: ""
@@ -996,6 +1159,13 @@ Item {
     interval: 90
     repeat: false
     onTriggered: root.flushPlayerVolume()
+  }
+
+  Timer {
+    id: lastfmScrobbleTimer
+    interval: 240000
+    repeat: false
+    onTriggered: root.submitLastfmScrobble(false)
   }
 
   Component.onCompleted: {

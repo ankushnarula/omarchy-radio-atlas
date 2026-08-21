@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n ${LASTFM_CURL_LOG:-} ]]; then
+  printf '%s\n' "$@" >> "$LASTFM_CURL_LOG"
+fi
+
+method=""
+for argument in "$@"; do
+  [[ $argument == method=* ]] && method=${argument#method=}
+done
+
+case $method in
+  track.getInfo)
+    printf '%s\n' '{"track":{"name":"Canonical Track","mbid":"01234567-89ab-cdef-0123-456789abcdef","duration":"202000","artist":{"name":"Canonical Artist"}}}'
+    ;;
+  track.updateNowPlaying)
+    printf '%s\n' '{"nowplaying":{"ignoredMessage":{"code":"0","#text":""}}}'
+    ;;
+  track.scrobble)
+    if [[ ${LASTFM_TEST_IGNORE:-0} == 1 ]]; then
+      printf '%s\n' '{"scrobbles":{"@attr":{"accepted":"0","ignored":"1"},"scrobble":{"ignoredMessage":{"code":"2","#text":"Track name failed filter"}}}}'
+    else
+      printf '%s\n' '{"scrobbles":{"@attr":{"accepted":"1","ignored":"0"},"scrobble":{"ignoredMessage":{"code":"0","#text":""}}}}'
+    fi
+    ;;
+  *)
+    echo "Unexpected Last.fm method: $method" >&2
+    exit 1
+    ;;
+esac

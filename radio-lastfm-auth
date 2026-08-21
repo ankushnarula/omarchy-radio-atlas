@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+config_root=${XDG_CONFIG_HOME:-$HOME/.config}
+config_file="$config_root/radio-atlas/lastfm.conf"
+runtime_dir="${XDG_RUNTIME_DIR:?}/omarchy-radio-atlas"
+token_file="$runtime_dir/lastfm-auth-token"
+api_root="https://ws.audioscrobbler.com/2.0/"
+action=${1:-}
+
+[[ $action == begin || $action == complete ]] || {
+  echo "Usage: radio-lastfm-auth begin|complete" >&2
+  exit 2
+}
+[[ -s $config_file && $(stat -c '%a' -- "$config_file") == 600 ]] || {
+  echo "Create $config_file with mode 600 before authorizing." >&2
+  exit 3
+}
+
+read_setting() {
+  local name=$1 value
+  value=$(sed -n "s/^${name}=//p" "$config_file" | tail -n 1)
+  [[ -n $value && $value != *$'\r'* ]] || return 1
+  printf '%s' "$value"
+}
+
+api_key=$(read_setting LASTFM_API_KEY) || exit 3
+api_secret=$(read_setting LASTFM_API_SECRET) || exit 3
+[[ $api_key =~ ^[A-Za-z0-9]{16,64}$ && $api_secret =~ ^[A-Za-z0-9]{16,128}$ ]] || exit 3
+
+if [[ $action == begin ]]; then
+  token_sig=$(printf 'api_key%smethodauth.getToken%s' "$api_key" "$api_secret" | md5sum | awk '{print $1}')
+  token_response=$(curl --silent --show-error --max-time 15 --proto '=https' --tlsv1.2 \
+    --data-urlencode 'method=auth.getToken' \
+    --data-urlencode "api_key=$api_key" \
+    --data-urlencode "api_sig=$token_sig" \
+    --data-urlencode 'format=json' "$api_root")
+  token=$(jq -er '.token | select(type == "string" and test("^[A-Za-z0-9_-]{16,128}$"))' <<< "$token_response") \
+    || { jq -r '.message // "Last.fm did not return an authorization token"' <<< "$token_response" >&2; exit 4; }
+  install -d -m 700 "$runtime_dir"
+  temporary=$(mktemp "$runtime_dir/lastfm-token.XXXXXX")
+  printf '%s\n' "$token" > "$temporary"
+  mv "$temporary" "$token_file"
+  xdg-open "https://www.last.fm/api/auth/?api_key=$api_key&token=$token" >/dev/null 2>&1 || true
+  echo "Approve Radio Atlas in your browser, then run: radio-lastfm-auth complete"
+  exit 0
+fi
+
+[[ -s $token_file && $(stat -c '%a' -- "$token_file") == 600 ]] || {
+  echo "No pending Last.fm authorization. Run radio-lastfm-auth begin first." >&2
+  exit 4
+}
+read -r token < "$token_file"
+[[ $token =~ ^[A-Za-z0-9_-]{16,128}$ ]] || exit 4
+session_sig=$(printf 'api_key%smethodauth.getSessiontoken%s%s' \
+  "$api_key" "$token" "$api_secret" | md5sum | awk '{print $1}')
+session_response=$(curl --silent --show-error --max-time 15 --proto '=https' --tlsv1.2 \
+  --data-urlencode 'method=auth.getSession' \
+  --data-urlencode "api_key=$api_key" \
+  --data-urlencode "token=$token" \
+  --data-urlencode "api_sig=$session_sig" \
+  --data-urlencode 'format=json' "$api_root")
+session_key=$(jq -er '.session.key | select(type == "string" and test("^[A-Za-z0-9_-]{16,128}$"))' <<< "$session_response") \
+  || { jq -r '.message // "Last.fm did not return a session key"' <<< "$session_response" >&2; exit 4; }
+username=$(jq -r '.session.name // "your Last.fm account"' <<< "$session_response")
+
+temporary=$(mktemp "$config_root/radio-atlas/lastfm.conf.XXXXXX")
+awk '!/^LASTFM_SESSION_KEY=/' "$config_file" > "$temporary"
+printf 'LASTFM_SESSION_KEY=%s\n' "$session_key" >> "$temporary"
+chmod 600 "$temporary"
+mv "$temporary" "$config_file"
+rm -f "$token_file"
+printf 'Last.fm connected for %s.\n' "$username"

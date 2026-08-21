@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ -n ${LASTFM_LOGGER_LOG:-} ]] || exit 0
+printf '%s\n' "$@" >> "$LASTFM_LOGGER_LOG"
